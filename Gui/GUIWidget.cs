@@ -437,7 +437,7 @@ namespace MatterHackers.Agg.UI
 		/// <summary>
 		/// Sets the cursor that will be used when the mouse is over this control
 		/// </summary>
-		public Cursors Cursor { get; set; }
+		public virtual Cursors Cursor { get; set; }
 
 		[Conditional("DEBUG")]
 		public static void BreakInDebugger(string description = "")
@@ -573,8 +573,6 @@ namespace MatterHackers.Agg.UI
 		}
 
 		protected Transform.Affine parentToChildTransform = Affine.NewIdentity();
-		private ObservableCollection<GuiWidget> children = new ObservableCollection<GuiWidget>();
-
 		private bool containsFocus = false;
 
 		internal int LayoutLockCount { get; set; }
@@ -708,7 +706,6 @@ namespace MatterHackers.Agg.UI
 		public GuiWidget()
 		{
 			screenClipping = new ScreenClipping(this);
-			children.CollectionChanged += children_CollectionChanged;
 			LayoutEngine = new LayoutEngineSimpleAlign();
 			HAnchor = hAnchor;
 			VAnchor = vAnchor;
@@ -719,21 +716,7 @@ namespace MatterHackers.Agg.UI
 			return $"Name = {Name}, Bounds = {LocalBounds} - {GetType().Name}";
 		}
 
-		private void children_CollectionChanged(object sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
-		{
-			if (childrenLockedInMouseUpCount != 0)
-			{
-				BreakInDebugger("The mouse should not be locked when the child list changes.");
-			}
-		}
-
-		public ObservableCollection<GuiWidget> Children
-		{
-			get
-			{
-				return children;
-			}
-		}
+		public List<GuiWidget> Children { get; } = new List<GuiWidget>();
 
 		public void ClearRemovedFlag()
 		{
@@ -1246,20 +1229,17 @@ namespace MatterHackers.Agg.UI
 
 		public string Name { get; set; }
 
-		private string text = "";
+		private string _text = "";
 		public virtual string Text
 		{
-			get => text;
+			get => _text;
 			set
 			{
-				if (value == null)
+				// make sure value is set to empty string rather than null
+				value = value ?? "";
+				if (_text != value)
 				{
-					throw new ArgumentNullException("You cannot set the Text to null.");
-				}
-				if (text != value)
-				{
-					Invalidate(); // do it before and after in case it changes size.
-					text = value;
+					_text = value;
 					OnTextChanged(null);
 					Invalidate();
 				}
@@ -1867,27 +1847,29 @@ namespace MatterHackers.Agg.UI
 
 		public virtual void OnLayout(LayoutEventArgs layoutEventArgs)
 		{
-			//using (new PerformanceTimer("_LAST_", "Widget OnLayout"))
+			if (this.HasBeenClosed)
 			{
-				if (Visible && !LayoutLocked)
+				return;
+			}
+
+			if (Visible && !LayoutLocked)
+			{
+				LayoutCount++;
+
+				if ((LayoutCount % 11057) == 0)
 				{
-					LayoutCount++;
-
-					if((LayoutCount % 11057) == 0)
-					{
-						int a = 0;
-					}
-
-					if (LayoutEngine != null)
-					{
-						using (LayoutLock())
-						{
-							LayoutEngine.Layout(layoutEventArgs);
-						}
-					}
-
-					Layout?.Invoke(this, layoutEventArgs);
+					int a = 0;
 				}
+
+				if (LayoutEngine != null)
+				{
+					using (LayoutLock())
+					{
+						LayoutEngine.Layout(layoutEventArgs);
+					}
+				}
+
+				Layout?.Invoke(this, layoutEventArgs);
 			}
 		}
 
@@ -2210,17 +2192,9 @@ namespace MatterHackers.Agg.UI
 
 		internal class ScreenClipping
 		{
-			private GuiWidget attachedTo;
-			internal bool needRebuild = true;
+			private readonly GuiWidget attachedTo;
 
-			internal bool NeedRebuild
-			{
-				get { return needRebuild; }
-				set
-				{
-					needRebuild = value;
-				}
-			}
+			internal bool NeedRebuild { get; set; } = true;
 
 			internal void MarkRecalculate()
 			{
@@ -2231,15 +2205,26 @@ namespace MatterHackers.Agg.UI
 					nextParent = nextParent.Parent;
 				}
 
-				MarkChildrenRecaculate();
+				MarkChildrenRecalculate();
 			}
 
-			private void MarkChildrenRecaculate()
+			private void MarkChildrenRecalculate()
 			{
+				if (attachedTo.HasBeenClosed)
+				{
+					return;
+				}
+
 				NeedRebuild = true;
+
 				foreach (GuiWidget child in attachedTo.Children)
 				{
-					child.screenClipping.MarkChildrenRecaculate();
+					child.screenClipping.MarkChildrenRecalculate();
+
+					if (attachedTo.HasBeenClosed)
+					{
+						return;
+					}
 				}
 			}
 

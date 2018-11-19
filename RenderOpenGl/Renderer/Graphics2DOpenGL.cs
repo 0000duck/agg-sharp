@@ -39,6 +39,7 @@ using MatterHackers.VectorMath;
 using System;
 using Tesselate;
 using MatterHackers.Agg.Platform;
+using System.Collections.Generic;
 
 namespace MatterHackers.RenderOpenGl
 {
@@ -48,7 +49,10 @@ namespace MatterHackers.RenderOpenGl
 		// be no runtime contention for this object (no thread contention).
 		private static AARenderToGLTesselator triangleEddgeInfo = new AARenderToGLTesselator();
 
-		private static ImageBuffer AATextureImage = null;
+		/// <summary>
+		/// A texture per alpha value
+		/// </summary>
+		private static List<ImageBuffer> AATextureImages = null;
 
 		public bool DoEdgeAntiAliasing = true;
 		private static RenderToGLTesselator renderNowTesselator = new RenderToGLTesselator();
@@ -115,20 +119,25 @@ namespace MatterHackers.RenderOpenGl
 
 		private void CheckLineImageCache()
 		{
-			if (AATextureImage == null)
+			if (AATextureImages == null)
 			{
-				AATextureImage = new ImageBuffer(1024, 4);
-				byte[] hardwarePixelBuffer = AATextureImage.GetBuffer();
-				for (int y = 0; y < 4; y++)
+				AATextureImages = new List<ImageBuffer>();
+				for (int i = 0; i < 256; i++)
 				{
-					byte alpha = 0;
-					for (int x = 0; x < 1024; x++)
+					var texture = new ImageBuffer(1024, 4);
+					AATextureImages.Add(texture);
+					byte[] hardwarePixelBuffer = texture.GetBuffer();
+					for (int y = 0; y < 4; y++)
 					{
-						hardwarePixelBuffer[(y * 1024 + x) * 4 + 0] = 255;
-						hardwarePixelBuffer[(y * 1024 + x) * 4 + 1] = 255;
-						hardwarePixelBuffer[(y * 1024 + x) * 4 + 2] = 255;
-						hardwarePixelBuffer[(y * 1024 + x) * 4 + 3] = alpha;
-						alpha = 255;
+						byte alpha = 0;
+						for (int x = 0; x < 1024; x++)
+						{
+							hardwarePixelBuffer[(y * 1024 + x) * 4 + 0] = 255;
+							hardwarePixelBuffer[(y * 1024 + x) * 4 + 1] = 255;
+							hardwarePixelBuffer[(y * 1024 + x) * 4 + 2] = 255;
+							hardwarePixelBuffer[(y * 1024 + x) * 4 + 3] = alpha;
+							alpha = (byte)i;
+						}
 					}
 				}
 			}
@@ -145,10 +154,11 @@ namespace MatterHackers.RenderOpenGl
 			}
 
 			Color colorBytes = colorIn.ToColor();
-			GL.Color4(colorBytes.red, colorBytes.green, colorBytes.blue, colorBytes.alpha);
+			// the alpha has come from the bound texture
+			GL.Color4(colorBytes.red, colorBytes.green, colorBytes.blue, (byte)255);
 
 			triangleEddgeInfo.Clear();
-            VertexSourceToTesselator.SendShapeToTesselator(triangleEddgeInfo, vertexSource);
+			VertexSourceToTesselator.SendShapeToTesselator(triangleEddgeInfo, vertexSource);
 
 			// now render it
 			triangleEddgeInfo.RenderLastToGL();
@@ -233,21 +243,22 @@ namespace MatterHackers.RenderOpenGl
 			}
 		}
 
-		public void PreRender()
+		public void PreRender(IColorType colorIn)
 		{
 			CheckLineImageCache();
 			PushOrthoProjection();
 
 			GL.Enable(EnableCap.Texture2D);
-			GL.BindTexture(TextureTarget.Texture2D, RenderOpenGl.ImageGlPlugin.GetImageGlPlugin(AATextureImage, false).GLTextureHandle);
+			GL.BindTexture(TextureTarget.Texture2D, RenderOpenGl.ImageGlPlugin.GetImageGlPlugin(AATextureImages[colorIn.Alpha0To255], false).GLTextureHandle);
 
-			GL.BlendFunc(BlendingFactorSrc.SrcAlpha, BlendingFactorDest.OneMinusSrcAlpha);
+			// the source is always all white so has no does not have its color changed by the alpha
+			GL.BlendFunc(BlendingFactorSrc.One, BlendingFactorDest.OneMinusSrcAlpha);
 			GL.Enable(EnableCap.Blend);
 		}
 
 		public override void Render(IVertexSource vertexSource, IColorType colorIn)
 		{
-			PreRender();
+			PreRender(colorIn);
 
 			if (DoEdgeAntiAliasing)
 			{
@@ -464,15 +475,19 @@ namespace MatterHackers.RenderOpenGl
 
 		public void RenderTransformedPath(Matrix4X4 transform, IVertexSource path, Color color, bool doDepthTest)
 		{
+			CheckLineImageCache();
+			GL.Enable(EnableCap.Texture2D);
+			GL.BindTexture(TextureTarget.Texture2D, RenderOpenGl.ImageGlPlugin.GetImageGlPlugin(AATextureImages[color.Alpha0To255], false).GLTextureHandle);
+
+			// the source is always all white so has no does not have its color changed by the alpha
+			GL.BlendFunc(BlendingFactorSrc.One, BlendingFactorDest.OneMinusSrcAlpha);
+			GL.Enable(EnableCap.Blend);
+
 			GL.Disable(EnableCap.CullFace);
-			GL.Disable(EnableCap.Texture2D);
 
 			GL.MatrixMode(MatrixMode.Modelview);
 			GL.PushMatrix();
 			GL.MultMatrix(transform.GetAsFloatArray());
-			//GL.DepthMask(false);
-			GL.Enable(EnableCap.Blend);
-			GL.BlendFunc(BlendingFactorSrc.SrcAlpha, BlendingFactorDest.OneMinusSrcAlpha);
 			GL.Disable(EnableCap.Lighting);
 			if (doDepthTest)
 			{
